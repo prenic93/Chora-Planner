@@ -9,6 +9,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
     <meta name="theme-color" content="#3B82F6">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="./offline-assets/fontawesome.css">
     <style>
         * {
             margin: 0;
@@ -2544,8 +2545,11 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="./offline-assets/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="./offline-assets/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="./offline-assets/jszip.min.js"></script>
     <script>
         // Setup PDF.js worker
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
@@ -2714,26 +2718,88 @@
                 }
 
                 let deferredPrompt;
+                
+                // Gestione prompt di installazione
                 window.addEventListener('beforeinstallprompt', (e) => {
+                    console.log('[PWA] Install prompt disponibile');
                     e.preventDefault();
                     deferredPrompt = e;
-                    document.getElementById('installPrompt').classList.remove('hidden');
-                });
-
-                document.getElementById('installBtn').addEventListener('click', async () => {
-                    if (deferredPrompt) {
-                        deferredPrompt.prompt();
-                        const { outcome } = await deferredPrompt.userChoice;
-                        console.log(`User response to the install prompt: ${outcome}`);
-                        deferredPrompt = null;
-                        document.getElementById('installPrompt').classList.add('hidden');
+                    
+                    // Mostra il prompt solo se l'app non è già installata
+                    if (!this.isAppInstalled()) {
+                        document.getElementById('installPrompt').classList.remove('hidden');
                     }
                 });
 
-                window.addEventListener('appinstalled', () => {
-                    document.getElementById('installPrompt').classList.add('hidden');
-                    console.log('PWA installed');
+                // Gestione click pulsante installazione
+                document.getElementById('installBtn').addEventListener('click', async () => {
+                    if (deferredPrompt) {
+                        try {
+                            deferredPrompt.prompt();
+                            const { outcome } = await deferredPrompt.userChoice;
+                            console.log(`[PWA] Risposta utente: ${outcome}`);
+                            
+                            if (outcome === 'accepted') {
+                                this.showToast('App installata con successo!', 'success');
+                            } else {
+                                this.showToast('Installazione annullata', 'secondary');
+                            }
+                            
+                            deferredPrompt = null;
+                            document.getElementById('installPrompt').classList.add('hidden');
+                        } catch (error) {
+                            console.error('[PWA] Errore durante installazione:', error);
+                            this.showToast('Errore durante l\'installazione', 'error');
+                        }
+                    } else {
+                        // Fallback per browser che non supportano il prompt automatico
+                        this.showInstallInstructions();
+                    }
                 });
+
+                // Gestione app installata
+                window.addEventListener('appinstalled', () => {
+                    console.log('[PWA] App installata');
+                    document.getElementById('installPrompt').classList.add('hidden');
+                    this.showToast('App installata! Ora funziona offline.', 'success', 5000);
+                });
+
+                // Gestione aggiornamenti Service Worker
+                navigator.serviceWorker?.addEventListener('message', event => {
+                    if (event.data?.type === 'SW_ACTIVATED') {
+                        console.log('[PWA] Service Worker attivato');
+                        this.showToast('App pronta per l\'uso offline', 'success', 3000);
+                    }
+                });
+
+                // Controlla se l'app è già installata
+                if (this.isAppInstalled()) {
+                    document.getElementById('installPrompt').classList.add('hidden');
+                }
+            }
+
+            isAppInstalled() {
+                // Controlla se l'app è in modalità standalone (installata)
+                return window.matchMedia('(display-mode: standalone)').matches ||
+                       window.navigator.standalone === true ||
+                       document.referrer.includes('android-app://');
+            }
+
+            showInstallInstructions() {
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+                const isAndroid = /Android/.test(navigator.userAgent);
+                
+                let instructions = 'Per installare l\'app:';
+                
+                if (isIOS) {
+                    instructions += '\n1. Tocca il pulsante Condividi (quadrato con freccia)\n2. Scorri e tocca "Aggiungi alla schermata Home"';
+                } else if (isAndroid) {
+                    instructions += '\n1. Tocca il menu del browser (⋮)\n2. Tocca "Aggiungi alla schermata Home" o "Installa app"';
+                } else {
+                    instructions += '\n1. Clicca sul menu del browser\n2. Cerca "Installa app" o "Aggiungi alla schermata Home"';
+                }
+                
+                alert(instructions);
             }
 
             async loadData() {
@@ -6467,100 +6533,39 @@
             window.app = app; // Make app accessible globally for direct calls from HTML
         };
 
-        // Service Worker for PWA
-        (function() {
+        // Service Worker Registration
+        function registerServiceWorker() {
             if ('serviceWorker' in navigator) {
-                const swCode = `
-                    const CACHE_NAME = 'canzoniere-v1.1'; // Updated cache version
-                    const urlsToCache = [
-                        '.',
-                        'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
-                        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js',
-                        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js', // Cache worker too
-                        'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-                    ];
-
-                    self.addEventListener('install', event => {
-                        event.waitUntil(
-                            caches.open(CACHE_NAME)
-                                .then(cache => {
-                                    console.log('Service Worker caching assets');
-                                    return cache.addAll(urlsToCache);
-                                 })
-                                 .catch(error => console.error('Failed to cache assets:', error))
-                        );
-                    });
-
-                    self.addEventListener('activate', event => {
-                        event.waitUntil(
-                            caches.keys().then(cacheNames => {
-                                return Promise.all(
-                                    cacheNames.map(cacheName => {
-                                        if (cacheName !== CACHE_NAME) {
-                                            console.log('Service Worker deleting old cache:', cacheName);
-                                            return caches.delete(cacheName);
-                                        }
-                                    })
-                                );
-                            })
-                        );
-                    });
-
-
-                    self.addEventListener('fetch', event => {
-                        event.respondWith(
-                            caches.match(event.request)
-                                .then(response => {
-                                    // Cache hit - return response
-                                    if (response) {
-                                        return response;
+                navigator.serviceWorker.register('./sw.js')
+                    .then(registration => {
+                        console.log('[SW] Service Worker registrato con successo:', registration);
+                        
+                        // Controlla se c'è un aggiornamento disponibile
+                        registration.addEventListener('updatefound', () => {
+                            const newWorker = registration.installing;
+                            newWorker.addEventListener('statechange', () => {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    // Nuovo Service Worker disponibile
+                                    if (confirm('È disponibile un aggiornamento dell\'app. Vuoi aggiornare ora?')) {
+                                        newWorker.postMessage({ type: 'SKIP_WAITING' });
+                                        window.location.reload();
                                     }
-                                    // No cache hit - fetch from network
-                                    return fetch(event.request).catch(error => {
-                                         console.error('Fetch failed for:', event.request.url, error);
-                                         // Optional: Provide a fallback response for offline
-                                    });
-                                })
-                        );
+                                }
+                            });
+                        });
+                    })
+                    .catch(error => {
+                        console.error('[SW] Registrazione Service Worker fallita:', error);
                     });
-                `;
                 
-                const blob = new Blob([swCode], { type: 'application/javascript' });
-                const swUrl = URL.createObjectURL(blob);
-                navigator.serviceWorker.register(swUrl)
-                    .then(reg => console.log('Service Worker registered from blob.', reg))
-                    .catch(err => console.error('Service Worker registration failed.', err));
-
-                // Clean up the setupPWA redundancy
-                CanzoniereApp.prototype.setupPWA = function() {
-                    if ('serviceWorker' in navigator) {
-                        // Already registered, do nothing.
+                // Ascolta i messaggi dal Service Worker
+                navigator.serviceWorker.addEventListener('message', event => {
+                    if (event.data && event.data.type === 'CACHE_UPDATED') {
+                        console.log('[SW] Cache aggiornata');
                     }
-
-                    let deferredPrompt;
-                    window.addEventListener('beforeinstallprompt', (e) => {
-                        e.preventDefault();
-                        deferredPrompt = e;
-                        document.getElementById('installPrompt').classList.remove('hidden');
-                    });
-
-                    document.getElementById('installBtn').addEventListener('click', async () => {
-                        if (deferredPrompt) {
-                            deferredPrompt.prompt();
-                            const { outcome } = await deferredPrompt.userChoice;
-                            console.log(`User response to the install prompt: ${outcome}`);
-                            deferredPrompt = null;
-                            document.getElementById('installPrompt').classList.add('hidden');
-                        }
-                    });
-
-                    window.addEventListener('appinstalled', () => {
-                        document.getElementById('installPrompt').classList.add('hidden');
-                        console.log('PWA installed');
-                    });
-                };
+                });
             }
-        })();
+        }
     </script>
     <div id="pdfExportProgressBarWrapper"><div id="pdfExportProgressBar"></div></div>
     <div id="zipExportProgressBarWrapper"><div id="zipExportProgressBar"></div></div>
