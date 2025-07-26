@@ -9,6 +9,7 @@
     <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
     <meta name="theme-color" content="#3B82F6">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="./offline-assets/fontawesome.css">
     <style>
         * {
             margin: 0;
@@ -696,6 +697,10 @@
         .event-actions {
             display: flex;
             gap: 4px;
+            margin-left: auto;
+            justify-content: flex-end;
+            align-items: center;
+            min-width: 80px;
         }
 
         /* Reorder Controls */
@@ -2544,8 +2549,11 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="./offline-assets/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="./offline-assets/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="./offline-assets/jszip.min.js"></script>
     <script>
         // Setup PDF.js worker
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
@@ -2562,9 +2570,119 @@
 
         // Main App Class
         class CanzoniereApp {
+            // --- CARTELLE ---
+            createFolderPrompt() {
+                const name = prompt('Nome nuova cartella:');
+                if (!name || !name.trim()) return;
+                const id = Date.now().toString();
+                this.folders.push({ id, name: name.trim() });
+                this.saveData().then(() => this.renderEventsList());
+            }
+            renameFolderPrompt(folderId) {
+                const folder = this.folders.find(f => f.id === folderId);
+                if (!folder) return;
+                const name = prompt('Nuovo nome cartella:', folder.name);
+                if (!name || !name.trim()) return;
+                folder.name = name.trim();
+                this.saveData().then(() => this.renderEventsList());
+            }
+            deleteFolderPrompt(folderId) {
+                if (!confirm('Vuoi eliminare questa cartella? Gli eventi resteranno visibili fuori da ogni cartella.')) return;
+                // Sposta eventi fuori dalla cartella
+                this.events.forEach(ev => { if (ev.folderId === folderId) ev.folderId = null; });
+                this.folders = this.folders.filter(f => f.id !== folderId);
+                if (this.currentFolderId === folderId) this.currentFolderId = null;
+                this.saveData().then(() => this.renderEventsList());
+            }
+            openFolder(folderId) {
+                this.currentFolderId = folderId;
+                this.renderEventsList();
+            }
+            // --- FINE CARTELLE ---
+            // --- ESPORTAZIONE AVANZATA ---
+            showExportModal() {
+                // Crea la modale
+                let modal = document.getElementById('exportModal');
+                if (modal) modal.remove();
+                modal = document.createElement('div');
+                modal.id = 'exportModal';
+                modal.className = 'modal-overlay';
+                // PDF
+                const pdfs = this.pdfs;
+                // Cartelle
+                const folders = this.folders;
+                // Eventi fuori cartelle
+                const eventsOut = this.events.filter(ev => !ev.folderId);
+                // Eventi per cartella
+                const eventsByFolder = {};
+                for (const folder of folders) {
+                    eventsByFolder[folder.id] = this.events.filter(ev => ev.folderId === folder.id);
+                }
+                // HTML
+                let html = `<div class='modal-content' style='max-width:600px;'>
+                    <h2><i class='fas fa-file-export'></i> Esporta dati</h2>
+                    <form id='exportSelectForm'>
+                        <h4>PDF</h4>
+                        <div style='margin-bottom:12px;'>`;
+                pdfs.forEach(pdf => {
+                    html += `<label style='display:block; margin-bottom:4px;'><input type='checkbox' name='pdf' value='${pdf.id}' checked> <i class='fas fa-file-pdf'></i> ${pdf.name}</label>`;
+                });
+                html += `</div><h4>Cartelle</h4><div style='margin-bottom:12px;'>`;
+                folders.forEach(folder => {
+                    html += `<label style='display:block; margin-bottom:4px;'><input type='checkbox' name='folder' value='${folder.id}' checked> <i class='fas fa-folder'></i> ${folder.name}</label>`;
+                });
+                html += `</div><h4>Eventi fuori cartelle</h4><div style='margin-bottom:12px;'>`;
+                eventsOut.forEach(ev => {
+                    html += `<label style='display:block; margin-bottom:4px;'><input type='checkbox' name='event' value='${ev.id}' checked> <i class='fas fa-music'></i> ${ev.name}</label>`;
+                });
+                html += `</div><div style='display:flex; gap:12px; justify-content:flex-end; margin-top:24px;'>
+                    <button type='button' class='btn btn-secondary' id='cancelExportBtn'>Annulla</button>
+                    <button type='submit' class='btn btn-success'><i class='fas fa-file-export'></i> Esporta</button>
+                </div></form></div>`;
+                modal.innerHTML = html;
+                document.body.appendChild(modal);
+                // Eventi
+                modal.querySelector('#cancelExportBtn').onclick = () => modal.remove();
+                modal.querySelector('#exportSelectForm').onsubmit = (e) => {
+                    e.preventDefault();
+                    const form = e.target;
+                    const pdfIds = Array.from(form.querySelectorAll('input[name="pdf"]:checked')).map(i => i.value);
+                    const folderIds = Array.from(form.querySelectorAll('input[name="folder"]:checked')).map(i => i.value);
+                    const eventIds = Array.from(form.querySelectorAll('input[name="event"]:checked')).map(i => i.value);
+                    modal.remove();
+                    this.exportAllData({ pdfIds, folderIds, eventIds });
+                };
+            }
+            // --- FINE ESPORTAZIONE AVANZATA ---
+            // --- DRAG & DROP EVENTI/CARTELLE ---
+            handleEventDragStart(e, eventId) {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', eventId);
+                this._draggedEventId = eventId;
+                setTimeout(() => {
+                    e.target.classList.add('dragging');
+                }, 0);
+            }
+            handleEventDragEnd(e) {
+                this._draggedEventId = null;
+                document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+                document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+            }
+            handleDropOnFolder(e, folderId) {
+                e.preventDefault();
+                const eventId = e.dataTransfer.getData('text/plain');
+                if (!eventId) return;
+                const eventObj = this.events.find(ev => ev.id === eventId);
+                if (!eventObj) return;
+                eventObj.folderId = folderId || null;
+                this.saveData().then(() => this.renderEventsList());
+            }
+            // --- FINE DRAG & DROP ---
             constructor() {
                 this.pdfs = [];
                 this.events = [];
+                this.folders = [];
+                this.currentFolderId = null;
                 this.currentPdf = null;
                 this.pdfDoc = null;
                 this.currentPageNum = 1;
@@ -2584,6 +2702,8 @@
                 this.searchResultClickTimeout = null; // Flag per evitare doppi click/touch
                 this.isRendering = false; // Flag per evitare race condition nel rendering
                 this.pendingPageChange = null; // Pagina in attesa di rendering
+                this.wakeLock = null;
+                this.wakeLockSupported = 'wakeLock' in navigator;
 
                 // Annotation system
                 this.annotationState = {
@@ -2638,7 +2758,7 @@
                 // Indicizzazione automatica SOLO per PDF non ancora indicizzati
                 await this.autoIndexExistingPdfs();
                 // Pulsanti esporta/importa dati
-                document.getElementById('exportDataBtn').addEventListener('click', () => this.exportAllData());
+                document.getElementById('exportDataBtn').addEventListener('click', () => this.showExportModal());
                 document.getElementById('importDataBtn').addEventListener('click', () => document.getElementById('importDataInput').click());
                 document.getElementById('importDataInput').addEventListener('change', (e) => this.importAllData(e));
                 // Pulsante pulizia annotazioni
@@ -2660,6 +2780,20 @@
                 this.addToEventBtn = document.getElementById('addToEventBtn');
                 this.pdfSearchInput = document.getElementById('pdfSearch');
                 this.pdfCanvasContainer = document.getElementById('pdfCanvasContainer');
+                if (this.pdfCanvasContainer) {
+                    this.pdfCanvasContainer.addEventListener('mousedown', (e) => {
+                        const searchResults = document.getElementById('searchResults');
+                        if (searchResults && searchResults.classList.contains('show')) {
+                            searchResults.classList.remove('show');
+                        }
+                    });
+                    this.pdfCanvasContainer.addEventListener('touchstart', (e) => {
+                        const searchResults = document.getElementById('searchResults');
+                        if (searchResults && searchResults.classList.contains('show')) {
+                            searchResults.classList.remove('show');
+                        }
+                    });
+                }
                 this.pdfContentWrapper = document.getElementById('pdfContentWrapper'); // The new wrapper
                 this.eventModal = document.getElementById('eventModal');
                 this.eventDetailModal = document.getElementById('eventDetailModal');
@@ -2714,26 +2848,88 @@
                 }
 
                 let deferredPrompt;
+                
+                // Gestione prompt di installazione
                 window.addEventListener('beforeinstallprompt', (e) => {
+                    console.log('[PWA] Install prompt disponibile');
                     e.preventDefault();
                     deferredPrompt = e;
-                    document.getElementById('installPrompt').classList.remove('hidden');
-                });
-
-                document.getElementById('installBtn').addEventListener('click', async () => {
-                    if (deferredPrompt) {
-                        deferredPrompt.prompt();
-                        const { outcome } = await deferredPrompt.userChoice;
-                        console.log(`User response to the install prompt: ${outcome}`);
-                        deferredPrompt = null;
-                        document.getElementById('installPrompt').classList.add('hidden');
+                    
+                    // Mostra il prompt solo se l'app non è già installata
+                    if (!this.isAppInstalled()) {
+                        document.getElementById('installPrompt').classList.remove('hidden');
                     }
                 });
 
-                window.addEventListener('appinstalled', () => {
-                    document.getElementById('installPrompt').classList.add('hidden');
-                    console.log('PWA installed');
+                // Gestione click pulsante installazione
+                document.getElementById('installBtn').addEventListener('click', async () => {
+                    if (deferredPrompt) {
+                        try {
+                            deferredPrompt.prompt();
+                            const { outcome } = await deferredPrompt.userChoice;
+                            console.log(`[PWA] Risposta utente: ${outcome}`);
+                            
+                            if (outcome === 'accepted') {
+                                this.showToast('App installata con successo!', 'success');
+                            } else {
+                                this.showToast('Installazione annullata', 'secondary');
+                            }
+                            
+                            deferredPrompt = null;
+                            document.getElementById('installPrompt').classList.add('hidden');
+                        } catch (error) {
+                            console.error('[PWA] Errore durante installazione:', error);
+                            this.showToast('Errore durante l\'installazione', 'error');
+                        }
+                    } else {
+                        // Fallback per browser che non supportano il prompt automatico
+                        this.showInstallInstructions();
+                    }
                 });
+
+                // Gestione app installata
+                window.addEventListener('appinstalled', () => {
+                    console.log('[PWA] App installata');
+                    document.getElementById('installPrompt').classList.add('hidden');
+                    this.showToast('App installata! Ora funziona offline.', 'success', 5000);
+                });
+
+                // Gestione aggiornamenti Service Worker
+                navigator.serviceWorker?.addEventListener('message', event => {
+                    if (event.data?.type === 'SW_ACTIVATED') {
+                        console.log('[PWA] Service Worker attivato');
+                        this.showToast('App pronta per l\'uso offline', 'success', 3000);
+                    }
+                });
+
+                // Controlla se l'app è già installata
+                if (this.isAppInstalled()) {
+                    document.getElementById('installPrompt').classList.add('hidden');
+                }
+            }
+
+            isAppInstalled() {
+                // Controlla se l'app è in modalità standalone (installata)
+                return window.matchMedia('(display-mode: standalone)').matches ||
+                       window.navigator.standalone === true ||
+                       document.referrer.includes('android-app://');
+            }
+
+            showInstallInstructions() {
+                const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+                const isAndroid = /Android/.test(navigator.userAgent);
+                
+                let instructions = 'Per installare l\'app:';
+                
+                if (isIOS) {
+                    instructions += '\n1. Tocca il pulsante Condividi (quadrato con freccia)\n2. Scorri e tocca "Aggiungi alla schermata Home"';
+                } else if (isAndroid) {
+                    instructions += '\n1. Tocca il menu del browser (⋮)\n2. Tocca "Aggiungi alla schermata Home" o "Installa app"';
+                } else {
+                    instructions += '\n1. Clicca sul menu del browser\n2. Cerca "Installa app" o "Aggiungi alla schermata Home"';
+                }
+                
+                alert(instructions);
             }
 
             async loadData() {
@@ -2827,10 +3023,15 @@
                     this.goToPage(parseInt(e.target.value));
                 }, 100)); // Debounce di 100ms
                 this.addToEventBtn.addEventListener('click', () => this.showAddToEventModal());
-                this.pdfSearchInput.addEventListener('input', debounce((e) => this.searchInPdf(e.target.value), 3000));
+                this.pdfSearchInput.addEventListener('input', debounce((e) => this.searchInPdf(e.target.value), 300));
 
                 // Search controls
-                this.searchClear.addEventListener('click', () => this.clearSearch());
+                this.searchClear.addEventListener('click', () => {
+                    this.clearSearch();
+                    this.hideSearchResults && this.hideSearchResults();
+                    const searchResults = document.getElementById('searchResults');
+                    if (searchResults) searchResults.classList.remove('show');
+                });
                 this.searchPrevBtn.addEventListener('click', () => this.prevSearchResult());
                 this.searchNextBtn.addEventListener('click', () => this.nextSearchResult());
                 
@@ -3260,33 +3461,86 @@
 
             renderEventsList() {
                 const eventsList = document.getElementById('eventsList');
-                if (this.events.length === 0) {
-                    eventsList.innerHTML = `
+                // UI: istruzione drag & drop
+                let foldersHtml = `<div style='margin-bottom:8px; color:#2563eb; font-size:0.98em;'><i class='fas fa-info-circle'></i> Trascina gli eventi sulle cartelle per organizzarli. Trascina su "Fuori cartelle" per riportarli nell'elenco principale.</div>`;
+                foldersHtml += `<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                        <button class="btn btn-primary btn-sm" id="createFolderBtn"><i class="fas fa-folder-plus"></i> Nuova Cartella</button>
+                        ${this.currentFolderId ? `<button class='btn btn-secondary btn-sm' id='backToRootBtn'><i class='fas fa-arrow-left'></i> Indietro</button>` : ''}
+                    </div>
+                `;
+                // Lista cartelle
+                if (!this.currentFolderId && this.folders.length > 0) {
+                    foldersHtml += this.folders.map(folder => {
+                        const count = this.events.filter(ev => ev.folderId === folder.id).length;
+                        return `
+                        <div class="event-item folder-drop-target" style="background: #f1f5f9; border-color: #64748b; cursor: pointer;" 
+                            onclick="app.openFolder('${folder.id}')"
+                            ondragover="event.preventDefault(); this.classList.add('drag-over')"
+                            ondragleave="this.classList.remove('drag-over')"
+                            ondrop="app.handleDropOnFolder(event, '${folder.id}')"
+                        >
+                            <div class="event-info">
+                                <h3 style="color: #2563eb"><i class="fas fa-folder"></i> ${folder.name}</h3>
+                                <small>${count} evento${count===1?'':'i'}</small>
+                            </div>
+                            <div class="event-actions">
+                                <button class="btn btn-secondary btn-sm btn-icon" onclick="event.stopPropagation(); app.renameFolderPrompt('${folder.id}')" title="Rinomina cartella"><i class="fas fa-edit"></i></button>
+                                <button class="btn btn-danger btn-sm btn-icon" onclick="event.stopPropagation(); app.deleteFolderPrompt('${folder.id}')" title="Elimina cartella"><i class="fas fa-trash"></i></button>
+                            </div>
+                        </div>
+                        `;
+                    }).join('');
+                }
+                // Eventi fuori da cartelle o dentro la cartella selezionata
+                let eventsHtml = '';
+                const eventsToShow = this.currentFolderId
+                    ? this.events.filter(ev => ev.folderId === this.currentFolderId)
+                    : this.events.filter(ev => !ev.folderId);
+                if (eventsToShow.length === 0 && (!this.folders.length || this.currentFolderId)) {
+                    eventsHtml = `
                         <div class="empty-state">
                             <i class="fas fa-calendar-alt"></i>
                             <h3>Nessun evento creato</h3>
                             <p>Crea il tuo primo evento per organizzare le scalette</p>
                         </div>
                     `;
-                    return;
+                } else {
+                    eventsHtml = eventsToShow.map(event => `
+                        <div class="event-item" draggable="true" ondragstart="app.handleEventDragStart(event, '${event.id}')" ondragend="app.handleEventDragEnd(event)" onclick="app.showEventDetail('${event.id}')" style="border-color: ${event.color}">
+                            <div class="event-info">
+                                <h3 style="color: ${event.color}"><i class="fas fa-music"></i> ${event.name}</h3>
+                                <p>${event.description || 'Nessuna descrizione'}</p>
+                                <small>${event.pages.length} pagine nella scaletta • Creato il ${new Date(event.createdDate).toLocaleDateString('it-IT')}</small>
+                            </div>
+                            <div class="event-actions">
+                                <button class="btn btn-secondary btn-sm btn-icon" onclick="event.stopPropagation(); app.editEvent('${event.id}')" title="Modifica evento">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button class="btn btn-danger btn-sm btn-icon" onclick="event.stopPropagation(); app.deleteEventConfirm('${event.id}')" title="Elimina evento">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
                 }
-                eventsList.innerHTML = this.events.map(event => `
-                    <div class="event-item" onclick="app.showEventDetail('${event.id}')" style="border-color: ${event.color}">
-                        <div class="event-info">
-                            <h3 style="color: ${event.color}"><i class="fas fa-music"></i> ${event.name}</h3>
-                            <p>${event.description || 'Nessuna descrizione'}</p>
-                            <small>${event.pages.length} pagine nella scaletta • Creato il ${new Date(event.createdDate).toLocaleDateString('it-IT')}</small>
-                        </div>
-                        <div class="event-actions">
-                            <button class="btn btn-secondary btn-sm btn-icon" onclick="event.stopPropagation(); app.editEvent('${event.id}')" title="Modifica evento">
-                                <i class="fas fa-edit"></i>
-                            </button>
-                            <button class="btn btn-danger btn-sm btn-icon" onclick="event.stopPropagation(); app.deleteEventConfirm('${event.id}')" title="Elimina evento">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </div>
-                `).join('');
+                // Area drop per spostare eventi fuori dalle cartelle
+                let dropAreaHtml = '';
+                if (this.currentFolderId) {
+                    dropAreaHtml = `<div class='event-item folder-drop-target' style='background:#e0edff; border:2px dashed #2563eb; color:#2563eb; justify-content:center; align-items:center; min-height:48px; margin-bottom:12px; text-align:center;' 
+                        ondragover="event.preventDefault(); this.classList.add('drag-over')"
+                        ondragleave="this.classList.remove('drag-over')"
+                        ondrop="app.handleDropOnFolder(event, null)">
+                        <i class="fas fa-level-up-alt"></i> Trascina qui per spostare l'evento fuori dalla cartella
+                    </div>`;
+                }
+                eventsList.innerHTML = foldersHtml + dropAreaHtml + eventsHtml;
+                // Event listeners per cartelle
+                setTimeout(() => {
+                    const btn = document.getElementById('createFolderBtn');
+                    if (btn) btn.onclick = () => this.createFolderPrompt();
+                    const backBtn = document.getElementById('backToRootBtn');
+                    if (backBtn) backBtn.onclick = () => { this.currentFolderId = null; this.renderEventsList(); };
+                }, 0);
             }
 
             // File Management
@@ -3407,6 +3661,13 @@
                 this.pdfViewer.style.display = 'block';
                 this.showLoading();
                 this.showControls();
+                
+                // Attiva il Wake Lock per mantenere lo schermo acceso
+                try {
+                    await this.requestWakeLock();
+                } catch (e) {
+                    // Ignora errori wake lock
+                }
                 this.pdfSearchInput.value = '';
                 this.pdfCanvasContainer.scrollTop = 0;
                 this.pdfCanvasContainer.scrollLeft = 0;
@@ -3683,6 +3944,9 @@
                 
                 // Ferma il salvataggio automatico
                 this.stopAutoSaveAnnotations();
+                
+                // Rilascia il Wake Lock
+                this.releaseWakeLock();
                 
                 this.pdfViewer.style.display = 'none';
                 if (this.pdfDoc) {
@@ -4672,12 +4936,34 @@
 
             showSearchResults() {
                 this.searchResults.classList.add('show');
+                // Aggiungi listener per chiusura su overlay e X
+                if (!this._searchModalListenersAdded) {
+                    this._searchModalListenersAdded = true;
+                    // Clic su overlay fuori dalla lista risultati
+                    this.searchResults.addEventListener('click', (e) => {
+                        if (e.target === this.searchResults) {
+                            this.hideSearchResults();
+                        }
+                    });
+                    // Clic su X
+                    const closeBtn = this.searchResults.querySelector('.search-clear');
+                    if (closeBtn) {
+                        closeBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            this.clearSearch();
+                        });
+                    }
+                }
             }
 
             hideSearchResults() {
                 this.searchResults.classList.remove('show');
                 // Rimuovi il blocco touch quando si chiude la ricerca
                 this.unblockTouchOutsideSearch();
+                // Forza il focus e la selezione dell'input per permettere la cancellazione manuale su iPad
+                setTimeout(() => {
+                    this.pdfSearchInput.blur();
+                }, 100);
             }
 
             showSearchLoading() {
@@ -4713,6 +4999,11 @@
                 this.pdfSearchInput.classList.remove('searching');
                 // Rimuovi il blocco touch quando si cancella la ricerca
                 this.unblockTouchOutsideSearch();
+                // Forza il focus e la selezione dell'input per permettere la cancellazione manuale su iPad
+                setTimeout(() => {
+                    this.pdfSearchInput.blur();
+                    this.pdfSearchInput.value = '';
+                }, 100);
             }
 
             goToSearchResult(index) {
@@ -4763,6 +5054,32 @@
                 if (currentItem) {
                     currentItem.classList.add('active');
                     currentItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+            }
+
+            // Wake Lock methods
+            async requestWakeLock() {
+                try {
+                    if ('wakeLock' in navigator) {
+                        this.wakeLock = await navigator.wakeLock.request('screen');
+                        console.log('Wake Lock attivato - lo schermo rimarrà acceso');
+                        this.wakeLock.addEventListener('release', () => {
+                            console.log('Wake Lock rilasciato automaticamente');
+                            this.wakeLock = null;
+                        });
+                    } else {
+                        console.log('Wake Lock API non supportata su questo dispositivo');
+                    }
+                } catch (err) {
+                    console.error('Errore nell\'attivazione del Wake Lock:', err);
+                }
+            }
+
+            releaseWakeLock() {
+                if (this.wakeLock) {
+                    this.wakeLock.release();
+                    this.wakeLock = null;
+                    console.log('Wake Lock rilasciato - lo schermo può spegnersi normalmente');
                 }
             }
 
@@ -5479,57 +5796,27 @@
                 for (let pageNum = 1; pageNum <= numPages; pageNum++) {
                     const key = `pdf_${pdfId}_${pageNum}`;
                     const data = this.annotationState.currentPageAnnotations[key];
-                    
-                    console.log(`[DEBUG] Pagina ${pageNum}:`, {
-                        key: key,
-                        hasData: !!data,
-                        drawingLength: data?.drawing?.length || 0,
-                        notesCount: data?.notes?.length || 0,
-                        drawingHistoryLength: data?.drawingHistory?.length || 0
-                    });
-                    
-                    // Verifica se ci sono annotazioni valide
+                    // Filtro: solo annotazioni con almeno una nota non vuota o un disegno effettivo
                     let hasValidDrawing = false;
                     let hasValidNotes = false;
-                    
                     if (data) {
                         // Verifica se il disegno contiene effettivamente del contenuto
                         if (data.drawing && typeof data.drawing === 'string' && data.drawing.length > 100) {
-                            // Controlla se il PNG contiene dati effettivi (non solo un canvas vuoto)
-                            // Un PNG vuoto o con contenuto minimo ha pattern specifici
+                            // PNG vuoto: pattern base64 di un canvas vuoto 1x1 o simili
                             const isMinimalPNG = data.drawing.includes('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==') ||
                                                data.drawing.includes('gQICAIaADBAgQIEAgLPCw+QLY1j9QigAAAABJRU5ErkJggg==');
-                            
                             hasValidDrawing = !isMinimalPNG;
-                            console.log(`[DEBUG] Pagina ${pageNum} - Drawing analysis:`, {
-                                drawingLength: data.drawing.length,
-                                isMinimalPNG: isMinimalPNG,
-                                hasValidDrawing: hasValidDrawing,
-                                drawingStart: data.drawing.substring(0, 50) + '...'
-                            });
                         }
-                        
                         // Verifica se ci sono note con contenuto effettivo
                         if (data.notes && Array.isArray(data.notes)) {
-                            hasValidNotes = data.notes.some(note => 
-                                note.content && note.content.trim() !== ''
-                            );
-                            console.log(`[DEBUG] Pagina ${pageNum} - Notes analysis:`, {
-                                notesCount: data.notes.length,
-                                hasValidNotes: hasValidNotes,
-                                notesContent: data.notes.map(n => n.content?.trim() || '').filter(c => c !== '')
-                            });
+                            hasValidNotes = data.notes.some(note => note.content && note.content.trim() !== '');
                         }
                     }
-                    
                     if (hasValidDrawing || hasValidNotes) {
                         pagesWithAnnotations.push({
                             pageNum,
                             pageKey: key
                         });
-                        console.log(`[DEBUG] Pagina ${pageNum} AGGIUNTA alla lista - Valid drawing: ${hasValidDrawing}, Valid notes: ${hasValidNotes}`);
-                    } else {
-                        console.log(`[DEBUG] Pagina ${pageNum} NON aggiunta - Valid drawing: ${hasValidDrawing}, Valid notes: ${hasValidNotes}`);
                     }
                 }
                 
@@ -5659,7 +5946,7 @@
             }
 
             // Handler placeholder per esportazione/importazione
-            async exportAllData() {
+            async exportAllData(selection) {
                 try {
                     this.showLoading();
                     console.log('Inizio esportazione...');
@@ -5669,7 +5956,9 @@
                     const zip = new JSZip();
                     // 1. Salva i PDF (binari)
                     console.log('Salvataggio PDF...');
+                    const pdfIds = selection?.pdfIds || this.pdfs.map(p => p.id);
                     for (const pdf of this.pdfs) {
+                        if (!pdfIds.includes(pdf.id)) continue;
                         zip.file(`pdfs/${pdf.id}_${pdf.name}`, new Uint8Array(pdf.data));
                     }
                     // 2. Salva le annotazioni da IndexedDB come file separati (COMPRESSE)
@@ -5691,16 +5980,29 @@
                                 reject(req.error);
                             };
                         });
-                        
                         // Comprimi ogni annotazione prima di salvarla
                         for (const entry of annotationsData) {
-                            console.log('Processando e comprimendo annotazione:', entry.id);
+                            // Filtra annotazioni solo per eventi selezionati
+                            let keep = false;
+                            if (selection) {
+                                // id annotazione: pdf_..._N oppure event_..._N
+                                if (entry.id.startsWith('pdf_')) {
+                                    // PDF: esporta solo se il PDF è selezionato
+                                    const pdfId = entry.id.split('_')[1];
+                                    if (pdfIds.includes(pdfId)) keep = true;
+                                } else if (entry.id.startsWith('event_')) {
+                                    // Eventi: esporta solo se l'evento è selezionato
+                                    const eventId = entry.id.split('_')[1];
+                                    if ((selection.eventIds||[]).includes(eventId)) keep = true;
+                                }
+                            } else {
+                                keep = true;
+                            }
+                            if (!keep) continue;
                             annotationKeys.push(entry.id);
-                            
                             // Mostra progresso della compressione
                             const progress = Math.round((annotationKeys.length / annotationsData.length) * 100);
                             this.showToast(`Compressione annotazioni: ${progress}%`, 'secondary', 1000);
-                            
                             // Comprimi l'annotazione per l'esportazione
                             const compressedData = await this.compressAnnotationForExport(entry.data);
                             zip.file(`annotations/${entry.id}.json`, JSON.stringify(compressedData));
@@ -5708,11 +6010,14 @@
                     } catch (error) {
                         console.warn('Errore nel caricamento annotazioni:', error);
                     }
-                    // 3. Salva eventi, metadati e lista annotazioni in JSON
+                    // 3. Salva eventi, cartelle, metadati e lista annotazioni in JSON
                     console.log('Creazione JSON di esportazione...');
+                    const folderIds = selection?.folderIds || this.folders.map(f => f.id);
+                    const eventIds = selection?.eventIds || this.events.map(e => e.id);
                     const exportJson = {
-                        events: this.events,
-                        pdfs: this.pdfs.map(pdf => ({
+                        events: this.events.filter(ev => eventIds.includes(ev.id)),
+                        folders: this.folders.filter(f => folderIds.includes(f.id)),
+                        pdfs: this.pdfs.filter(pdf => pdfIds.includes(pdf.id)).map(pdf => ({
                             id: pdf.id,
                             name: pdf.name,
                             size: pdf.size,
@@ -6458,6 +6763,34 @@
                     this.showToast('Errore nella pulizia annotazioni orfane', 'error');
                 }
             }
+
+            // Wake Lock per mantenere lo schermo acceso durante la visualizzazione PDF
+            async requestWakeLock() {
+                try {
+                    if ('wakeLock' in navigator) {
+                        this.wakeLock = await navigator.wakeLock.request('screen');
+                        console.log('Wake Lock attivato - lo schermo rimarrà acceso');
+                        
+                        // Gestisci il caso in cui il Wake Lock viene rilasciato automaticamente
+                        this.wakeLock.addEventListener('release', () => {
+                            console.log('Wake Lock rilasciato automaticamente');
+                            this.wakeLock = null;
+                        });
+                    } else {
+                        console.log('Wake Lock API non supportata su questo dispositivo');
+                    }
+                } catch (err) {
+                    console.error('Errore nell\'attivazione del Wake Lock:', err);
+                }
+            }
+
+            releaseWakeLock() {
+                if (this.wakeLock) {
+                    this.wakeLock.release();
+                    this.wakeLock = null;
+                    console.log('Wake Lock rilasciato - lo schermo può spegnersi normalmente');
+                }
+            }
         }
 
         // Initialize app
@@ -6467,100 +6800,39 @@
             window.app = app; // Make app accessible globally for direct calls from HTML
         };
 
-        // Service Worker for PWA
-        (function() {
+        // Service Worker Registration
+        function registerServiceWorker() {
             if ('serviceWorker' in navigator) {
-                const swCode = `
-                    const CACHE_NAME = 'canzoniere-v1.1'; // Updated cache version
-                    const urlsToCache = [
-                        '.',
-                        'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
-                        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js',
-                        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js', // Cache worker too
-                        'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-                    ];
-
-                    self.addEventListener('install', event => {
-                        event.waitUntil(
-                            caches.open(CACHE_NAME)
-                                .then(cache => {
-                                    console.log('Service Worker caching assets');
-                                    return cache.addAll(urlsToCache);
-                                 })
-                                 .catch(error => console.error('Failed to cache assets:', error))
-                        );
-                    });
-
-                    self.addEventListener('activate', event => {
-                        event.waitUntil(
-                            caches.keys().then(cacheNames => {
-                                return Promise.all(
-                                    cacheNames.map(cacheName => {
-                                        if (cacheName !== CACHE_NAME) {
-                                            console.log('Service Worker deleting old cache:', cacheName);
-                                            return caches.delete(cacheName);
-                                        }
-                                    })
-                                );
-                            })
-                        );
-                    });
-
-
-                    self.addEventListener('fetch', event => {
-                        event.respondWith(
-                            caches.match(event.request)
-                                .then(response => {
-                                    // Cache hit - return response
-                                    if (response) {
-                                        return response;
+                navigator.serviceWorker.register('./sw.js')
+                    .then(registration => {
+                        console.log('[SW] Service Worker registrato con successo:', registration);
+                        
+                        // Controlla se c'è un aggiornamento disponibile
+                        registration.addEventListener('updatefound', () => {
+                            const newWorker = registration.installing;
+                            newWorker.addEventListener('statechange', () => {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    // Nuovo Service Worker disponibile
+                                    if (confirm('È disponibile un aggiornamento dell\'app. Vuoi aggiornare ora?')) {
+                                        newWorker.postMessage({ type: 'SKIP_WAITING' });
+                                        window.location.reload();
                                     }
-                                    // No cache hit - fetch from network
-                                    return fetch(event.request).catch(error => {
-                                         console.error('Fetch failed for:', event.request.url, error);
-                                         // Optional: Provide a fallback response for offline
-                                    });
-                                })
-                        );
+                                }
+                            });
+                        });
+                    })
+                    .catch(error => {
+                        console.error('[SW] Registrazione Service Worker fallita:', error);
                     });
-                `;
                 
-                const blob = new Blob([swCode], { type: 'application/javascript' });
-                const swUrl = URL.createObjectURL(blob);
-                navigator.serviceWorker.register(swUrl)
-                    .then(reg => console.log('Service Worker registered from blob.', reg))
-                    .catch(err => console.error('Service Worker registration failed.', err));
-
-                // Clean up the setupPWA redundancy
-                CanzoniereApp.prototype.setupPWA = function() {
-                    if ('serviceWorker' in navigator) {
-                        // Already registered, do nothing.
+                // Ascolta i messaggi dal Service Worker
+                navigator.serviceWorker.addEventListener('message', event => {
+                    if (event.data && event.data.type === 'CACHE_UPDATED') {
+                        console.log('[SW] Cache aggiornata');
                     }
-
-                    let deferredPrompt;
-                    window.addEventListener('beforeinstallprompt', (e) => {
-                        e.preventDefault();
-                        deferredPrompt = e;
-                        document.getElementById('installPrompt').classList.remove('hidden');
-                    });
-
-                    document.getElementById('installBtn').addEventListener('click', async () => {
-                        if (deferredPrompt) {
-                            deferredPrompt.prompt();
-                            const { outcome } = await deferredPrompt.userChoice;
-                            console.log(`User response to the install prompt: ${outcome}`);
-                            deferredPrompt = null;
-                            document.getElementById('installPrompt').classList.add('hidden');
-                        }
-                    });
-
-                    window.addEventListener('appinstalled', () => {
-                        document.getElementById('installPrompt').classList.add('hidden');
-                        console.log('PWA installed');
-                    });
-                };
+                });
             }
-        })();
+        }
     </script>
     <div id="pdfExportProgressBarWrapper"><div id="pdfExportProgressBar"></div></div>
     <div id="zipExportProgressBarWrapper"><div id="zipExportProgressBar"></div></div>
