@@ -1,7 +1,8 @@
-// Service Worker per Chora Planner PWA
-const CACHE_NAME = 'chora-planner-v1.2';
-const STATIC_CACHE = 'chora-static-v1.2';
-const DYNAMIC_CACHE = 'chora-dynamic-v1.2';
+// Service Worker per Chora Planner PWA - Versione Offline Completa
+const CACHE_NAME = 'chora-planner-v2.0';
+const STATIC_CACHE = 'chora-static-v2.0';
+const DYNAMIC_CACHE = 'chora-dynamic-v2.0';
+const OFFLINE_CACHE = 'chora-offline-v2.0';
 
 // File statici da cachare immediatamente
 const STATIC_ASSETS = [
@@ -13,18 +14,28 @@ const STATIC_ASSETS = [
     './icon-512.png'
 ];
 
-// CDN assets da cachare quando richiesti
-const CDN_ASSETS = [
+// CDN assets critici da cachare immediatamente per funzionamento offline
+const CRITICAL_CDN_ASSETS = [
     'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css',
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-solid-900.woff2',
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-regular-400.woff2',
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-brands-400.woff2',
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js',
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js',
     'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
     'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
 ];
 
-// Installazione del Service Worker
+// Assets aggiuntivi da cachare quando richiesti
+const OPTIONAL_ASSETS = [
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-solid-900.ttf',
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-regular-400.ttf',
+    'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/webfonts/fa-brands-400.ttf'
+];
+
+// Installazione del Service Worker con caching completo per offline
 self.addEventListener('install', event => {
-    console.log('[SW] Service Worker installato');
+    console.log('[SW] Service Worker installato - Preparazione cache offline');
     
     event.waitUntil(
         Promise.all([
@@ -33,17 +44,34 @@ self.addEventListener('install', event => {
                 console.log('[SW] Caching static assets');
                 return cache.addAll(STATIC_ASSETS);
             }),
-            // Pre-cache degli asset CDN critici
-            caches.open(DYNAMIC_CACHE).then(cache => {
-                console.log('[SW] Pre-caching CDN assets');
-                return cache.addAll(CDN_ASSETS.slice(0, 2)); // Solo i primi 2 asset critici
+            // Cache completa degli asset CDN critici per funzionamento offline
+            caches.open(OFFLINE_CACHE).then(cache => {
+                console.log('[SW] Pre-caching critical CDN assets for offline');
+                return Promise.allSettled(
+                    CRITICAL_CDN_ASSETS.map(async (url) => {
+                        try {
+                            const response = await fetch(url, { 
+                                mode: 'cors',
+                                cache: 'force-cache'
+                            });
+                            if (response.ok) {
+                                await cache.put(url, response);
+                                console.log('[SW] Cached:', url);
+                            }
+                        } catch (error) {
+                            console.warn('[SW] Failed to cache:', url, error);
+                        }
+                    })
+                );
             })
         ]).then(() => {
-            console.log('[SW] Cache iniziale completata');
+            console.log('[SW] Cache offline completata - App pronta per funzionamento offline');
             // Forza l'attivazione immediata
             return self.skipWaiting();
         }).catch(error => {
             console.error('[SW] Errore durante l\'installazione:', error);
+            // Anche in caso di errore, procedi con l'installazione
+            return self.skipWaiting();
         })
     );
 });
@@ -60,6 +88,7 @@ self.addEventListener('activate', event => {
                     cacheNames.map(cacheName => {
                         if (cacheName !== STATIC_CACHE && 
                             cacheName !== DYNAMIC_CACHE && 
+                            cacheName !== OFFLINE_CACHE &&
                             cacheName !== CACHE_NAME) {
                             console.log('[SW] Eliminazione cache obsoleta:', cacheName);
                             return caches.delete(cacheName);
@@ -81,7 +110,7 @@ self.addEventListener('activate', event => {
     );
 });
 
-// Gestione delle richieste di rete
+// Gestione delle richieste di rete con supporto offline completo
 self.addEventListener('fetch', event => {
     const request = event.request;
     const url = new URL(request.url);
@@ -94,55 +123,47 @@ self.addEventListener('fetch', event => {
     // Strategia Cache First per asset statici
     if (STATIC_ASSETS.some(asset => request.url.includes(asset)) || 
         request.url.includes('icon-')) {
-        event.respondWith(cacheFirst(request, STATIC_CACHE));
+        event.respondWith(cacheFirstOffline(request, STATIC_CACHE));
         return;
     }
     
-    // Strategia Stale While Revalidate per CDN assets
-    if (CDN_ASSETS.some(asset => request.url.includes(asset.split('/').pop()))) {
-        event.respondWith(staleWhileRevalidate(request, DYNAMIC_CACHE));
+    // Strategia Cache First per CDN assets critici (per funzionamento offline)
+    if (CRITICAL_CDN_ASSETS.some(asset => request.url.includes(asset.split('/').pop()))) {
+        event.respondWith(cacheFirstOffline(request, OFFLINE_CACHE));
+        return;
+    }
+    
+    // Strategia Cache First per font files
+    if (request.url.includes('webfonts/') || request.url.includes('.woff') || request.url.includes('.ttf')) {
+        event.respondWith(cacheFirstOffline(request, OFFLINE_CACHE));
         return;
     }
     
     // Strategia Network First per tutto il resto
-    event.respondWith(networkFirst(request, DYNAMIC_CACHE));
+    event.respondWith(networkFirstWithOfflineFallback(request, DYNAMIC_CACHE));
 });
 
-// Strategia Cache First
-async function cacheFirst(request, cacheName) {
+// Strategia Cache First ottimizzata per offline
+async function cacheFirstOffline(request, cacheName) {
     try {
-        const cache = await caches.open(cacheName);
-        const cachedResponse = await cache.match(request);
+        // Prova prima tutte le cache disponibili
+        const cacheNames = [cacheName, OFFLINE_CACHE, STATIC_CACHE, DYNAMIC_CACHE];
         
-        if (cachedResponse) {
-            console.log('[SW] Cache hit:', request.url);
-            return cachedResponse;
+        for (const cache_name of cacheNames) {
+            const cache = await caches.open(cache_name);
+            const cachedResponse = await cache.match(request);
+            
+            if (cachedResponse) {
+                console.log('[SW] Cache hit in', cache_name, ':', request.url);
+                return cachedResponse;
+            }
         }
         
         console.log('[SW] Cache miss, fetching:', request.url);
-        const networkResponse = await fetch(request);
-        
-        if (networkResponse.ok) {
-            cache.put(request, networkResponse.clone());
-        }
-        
-        return networkResponse;
-    } catch (error) {
-        console.error('[SW] Cache First error:', error);
-        // Fallback per file critici
-        if (request.url.includes('index.html')) {
-            return new Response('App offline - Ricarica quando torni online', {
-                headers: { 'Content-Type': 'text/html' }
-            });
-        }
-        throw error;
-    }
-}
-
-// Strategia Network First
-async function networkFirst(request, cacheName) {
-    try {
-        const networkResponse = await fetch(request);
+        const networkResponse = await fetch(request, { 
+            mode: 'cors',
+            cache: 'default'
+        });
         
         if (networkResponse.ok) {
             const cache = await caches.open(cacheName);
@@ -151,18 +172,86 @@ async function networkFirst(request, cacheName) {
         
         return networkResponse;
     } catch (error) {
-        console.log('[SW] Network failed, trying cache:', request.url);
-        const cache = await caches.open(cacheName);
-        const cachedResponse = await cache.match(request);
+        console.error('[SW] Cache First Offline error:', error);
         
-        if (cachedResponse) {
-            return cachedResponse;
+        // Fallback per file critici - prova in tutte le cache
+        const cacheNames = [OFFLINE_CACHE, STATIC_CACHE, DYNAMIC_CACHE];
+        for (const cache_name of cacheNames) {
+            try {
+                const cache = await caches.open(cache_name);
+                const fallbackResponse = await cache.match(request);
+                if (fallbackResponse) {
+                    console.log('[SW] Fallback found in', cache_name);
+                    return fallbackResponse;
+                }
+            } catch (e) {
+                console.warn('[SW] Fallback cache error:', e);
+            }
+        }
+        
+        // Ultimo fallback per HTML
+        if (request.url.includes('index.html') || request.headers.get('accept')?.includes('text/html')) {
+            try {
+                const staticCache = await caches.open(STATIC_CACHE);
+                const indexResponse = await staticCache.match('./index.html');
+                if (indexResponse) {
+                    return indexResponse;
+                }
+            } catch (e) {
+                console.error('[SW] Index fallback failed:', e);
+            }
+        }
+        
+        throw error;
+    }
+}
+
+// Strategia Network First con fallback offline robusto
+async function networkFirstWithOfflineFallback(request, cacheName) {
+    try {
+        const networkResponse = await fetch(request, {
+            mode: 'cors',
+            cache: 'default'
+        });
+        
+        if (networkResponse.ok) {
+            const cache = await caches.open(cacheName);
+            cache.put(request, networkResponse.clone());
+        }
+        
+        return networkResponse;
+    } catch (error) {
+        console.log('[SW] Network failed, trying offline fallback:', request.url);
+        
+        // Prova in tutte le cache disponibili
+        const cacheNames = [cacheName, OFFLINE_CACHE, STATIC_CACHE, DYNAMIC_CACHE];
+        
+        for (const cache_name of cacheNames) {
+            try {
+                const cache = await caches.open(cache_name);
+                const cachedResponse = await cache.match(request);
+                
+                if (cachedResponse) {
+                    console.log('[SW] Offline fallback found in', cache_name);
+                    return cachedResponse;
+                }
+            } catch (e) {
+                console.warn('[SW] Cache access error:', e);
+            }
         }
         
         // Fallback per pagine HTML
-        if (request.headers.get('accept').includes('text/html')) {
-            const fallbackCache = await caches.open(STATIC_CACHE);
-            return fallbackCache.match('./index.html');
+        if (request.headers.get('accept')?.includes('text/html')) {
+            try {
+                const staticCache = await caches.open(STATIC_CACHE);
+                const indexResponse = await staticCache.match('./index.html');
+                if (indexResponse) {
+                    console.log('[SW] HTML fallback served');
+                    return indexResponse;
+                }
+            } catch (e) {
+                console.error('[SW] HTML fallback failed:', e);
+            }
         }
         
         throw error;

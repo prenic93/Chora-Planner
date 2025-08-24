@@ -1015,6 +1015,36 @@
             display: none;
         }
 
+        /* Offline Status Indicator */
+        .offline-indicator {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            text-align: center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+            box-shadow: 0 4px 16px rgba(245, 158, 11, 0.3);
+            font-weight: 500;
+            animation: pulse 2s infinite;
+        }
+
+        .offline-indicator.hidden {
+            display: none;
+        }
+
+        .offline-indicator i {
+            font-size: 1.2rem;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+
         /* Empty state */
         .empty-state {
             text-align: center;
@@ -2502,13 +2532,18 @@
     </style>
 </head>
 <body>
-    <div id="app">
-        <!-- Install Prompt -->
+    <div id="app"<!-- Install Prompt -->
         <div id="installPrompt" class="install-prompt hidden">
             <p>Installa l'app per un accesso più veloce e funzionalità offline!</p>
             <button id="installBtn" class="btn btn-success btn-sm">
                 <i class="fas fa-download"></i> Installa App
             </button>
+        </div>
+
+        <!-- Offline Status Indicator -->
+        <div id="offlineIndicator" class="offline-indicator hidden">
+            <i class="fas fa-wifi-slash"></i>
+            <span>Modalità Offline - I tuoi dati sono salvati localmente</span>
         </div>
 
         <!-- Header -->
@@ -3178,6 +3213,11 @@
                 if ('serviceWorker' in navigator) {
                     window.addEventListener('load', () => {
                         registerServiceWorker();
+                        
+                        // Inizializza gestione stato offline
+                        updateOfflineStatus();
+                        window.addEventListener('online', updateOfflineStatus);
+                        window.addEventListener('offline', updateOfflineStatus);
                     });
                 }
 
@@ -7446,6 +7486,19 @@
             app = new CanzoniereApp();
             window.app = app; // Make app accessible globally for direct calls from HTML
         };
+
+        // Offline Status Management
+        function updateOfflineStatus() {
+            const offlineIndicator = document.getElementById('offlineIndicator');
+            
+            if (!navigator.onLine) {
+                offlineIndicator.classList.remove('hidden');
+                console.log('[App] Modalità offline attivata');
+            } else {
+                offlineIndicator.classList.add('hidden');
+                console.log('[App] Connessione online ripristinata');
+            }
+        }
 
         // Service Worker Registration
         function registerServiceWorker() {
